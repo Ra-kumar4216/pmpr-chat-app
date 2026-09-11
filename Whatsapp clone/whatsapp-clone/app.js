@@ -667,12 +667,13 @@ function setupMessagingHandlers() {
   });
 
   attachImageInput.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (file) {
+    const files = Array.from(e.target.files || []);
+    files.forEach(file => {
       const reader = new FileReader();
-      reader.onload = (evt) => sendMediaMessage('image', evt.target.result, file.name);
+      reader.onload = (evt) => sendMediaMessage(file.type.startsWith('video/') ? 'video' : 'image', evt.target.result, file.name);
       reader.readAsDataURL(file);
-    }
+    });
+    e.target.value = '';
     attachmentMenu.classList.add('hidden');
   });
 
@@ -1191,3 +1192,126 @@ function showTypingIndicator(username) {
     }, 2500);
   }
 }
+
+
+/* PMPR Modern Messenger Enhancements */
+const PMPR_REACTIONS = ['❤️', '😂', '👍', '😢', '😡', '👏', '🔥'];
+const PMPR_REACTION_LABELS = { '❤️': 'Love', '😂': 'Laugh', '👍': 'Like', '😢': 'Sad', '😡': 'Angry', '👏': 'Applause', '🔥': 'Fire' };
+let pmprPresenceTimer = null;
+let pmprReplyTo = null;
+let pmprEditingId = null;
+
+function pmprEscape(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch]));
+}
+function pmprMessageLabel(m) {
+  if (m.type === 'image') return '📷 Photo';
+  if (m.type === 'video') return '🎥 Video';
+  if (m.type === 'audio') return '🎙️ Voice note';
+  if (m.type === 'document') return '📄 ' + (m.fileName || 'Document');
+  return m.text || 'Message';
+}
+function pmprSave() { saveStateToLocalStorage(); }
+function pmprFindMessage(id) { return (messagesStore[activeContactId] || []).find(m => m.id === id); }
+function pmprUpdateComposer() {
+  if (!messageInput) return;
+  const wrapper = messageInput.parentElement;
+  let banner = document.getElementById('pmpr-composer-context');
+  if (!pmprReplyTo && !pmprEditingId) { if (banner) banner.remove(); return; }
+  if (!banner) { banner = document.createElement('div'); banner.id = 'pmpr-composer-context'; banner.className = 'absolute bottom-16 left-4 right-4 md:left-auto md:right-4 md:w-[min(520px,calc(100%-2rem))] bg-white dark:bg-wa-darkHeader border border-wa-teal rounded-xl px-3 py-2 shadow-lg z-20 flex items-center gap-2'; wrapper.parentElement.parentElement.appendChild(banner); }
+  const m = pmprReplyTo || pmprFindMessage(pmprEditingId);
+  banner.innerHTML = `<span class="text-wa-teal">${pmprEditingId ? '✏️ Editing' : '↩ Replying'}</span><span class="text-xs text-slate-500 truncate flex-1">${pmprEscape(pmprMessageLabel(m))}</span><button class="text-slate-400" data-pmpr-cancel-context>×</button>`;
+}
+function pmprSetReply(id) { pmprReplyTo = pmprFindMessage(id); pmprEditingId = null; messageInput.value = ''; pmprUpdateComposer(); messageInput.focus(); }
+function pmprSetEdit(id) { const m = pmprFindMessage(id); if (!m || m.type !== 'text') return; pmprEditingId = id; pmprReplyTo = null; messageInput.value = m.text || ''; pmprUpdateComposer(); messageInput.focus(); }
+function pmprToggleReaction(id, emoji) {
+  const m = pmprFindMessage(id); if (!m) return;
+  m.reactions = m.reactions || {};
+  m.reactions[emoji] = m.reactions[emoji] || [];
+  const who = currentUser.phone;
+  m.reactions[emoji] = m.reactions[emoji].includes(who) ? m.reactions[emoji].filter(x => x !== who) : [...m.reactions[emoji], who];
+  pmprSave(); renderMessages(chatSearchInput?.value.toLowerCase() || '');
+}
+function pmprDelete(id, everyone = false) {
+  const list = messagesStore[activeContactId] || []; const m = list.find(x => x.id === id); if (!m) return;
+  if (everyone && m.sender !== currentUser.phone) return alert('You can delete for everyone only for your own messages.');
+  if (everyone) { m.deleted = true; m.text = 'This message was deleted'; m.mediaUrl = ''; m.type = 'text'; }
+  else messagesStore[activeContactId] = list.filter(x => x.id !== id);
+  pmprSave(); renderMessages();
+}
+function pmprForward(id) {
+  const m = pmprFindMessage(id); if (!m) return;
+  const choices = contacts.filter(c => c.id !== activeContactId).map((c, i) => `${i + 1}. ${c.name}`).join('\n');
+  if (!choices) return alert('Add another chat before forwarding.');
+  const selected = Number(prompt(`Forward to:\n${choices}\nEnter number`)) - 1;
+  const target = contacts.filter(c => c.id !== activeContactId)[selected]; if (!target) return;
+  messagesStore[target.id] = messagesStore[target.id] || [];
+  messagesStore[target.id].push({ ...m, id: 'msg_' + Date.now(), sender: currentUser.phone, forwarded: true, time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) });
+  target.lastMessage = pmprMessageLabel(m); target.lastTime = 'Just now'; pmprSave(); renderChatList(); alert(`Forwarded to ${target.name}`);
+}
+function pmprCopy(id) { const m = pmprFindMessage(id); if (m?.text) navigator.clipboard?.writeText(m.text).then(() => alert('Message copied')); }
+function pmprShowReactions(id) {
+  const el = document.querySelector(`[data-pmpr-reactions="${id}"]`); if (el) el.classList.toggle('hidden');
+}
+function pmprRenderActions(m, isMe) {
+  return `<div class="absolute ${isMe ? 'right-1' : 'left-1'} -top-3 hidden group-hover:flex bg-white dark:bg-wa-darkHeader rounded-full shadow border border-slate-200 dark:border-slate-700 p-1 gap-0.5 z-10">
+    <button title="React" data-pmpr-react-toggle="${m.id}" class="px-1">😊</button><button title="Reply" data-pmpr-action="reply" data-id="${m.id}" class="px-1">↩</button><button title="More" data-pmpr-more="${m.id}" class="px-1">•••</button>
+  </div><div data-pmpr-reactions="${m.id}" class="hidden absolute ${isMe ? 'right-0' : 'left-0'} -top-11 bg-white dark:bg-wa-darkHeader rounded-full shadow border border-slate-200 dark:border-slate-700 px-2 py-1 z-20">${PMPR_REACTIONS.map(e => `<button title="${PMPR_REACTION_LABELS[e]}" data-pmpr-reaction="${e}" data-id="${m.id}" class="text-lg hover:scale-125 transition px-0.5">${e}</button>`).join('')}</div>`;
+}
+function pmprRenderMessageHtml(m, isMe) {
+  let content = `<p class="whitespace-pre-wrap break-words">${pmprEscape(m.text || '')}</p>`;
+  if (m.replyTo) content = `<div class="border-l-2 border-wa-teal bg-black/5 dark:bg-white/5 rounded px-2 py-1 mb-1 text-xs opacity-80">↩ ${pmprEscape(pmprMessageLabel(m.replyTo))}</div>` + content;
+  if (m.forwarded) content = `<div class="text-[10px] opacity-60 mb-1">↗ Forwarded</div>` + content;
+  if (m.type === 'image' && m.mediaUrl) content = `<img src="${m.mediaUrl}" alt="${pmprEscape(m.fileName || 'Image')}" class="rounded-lg max-h-60 max-w-full object-cover mb-1 border border-black/10 cursor-zoom-in" data-pmpr-preview="${m.mediaUrl}"><p class="text-xs">${pmprEscape(m.text || '')}</p>`;
+  if (m.type === 'video' && m.mediaUrl) content = `<video controls src="${m.mediaUrl}" class="rounded-lg max-h-60 max-w-full mb-1"></video><p class="text-xs">${pmprEscape(m.fileName || 'Video')}</p>`;
+  if (m.type === 'document') content = `<a href="${m.mediaUrl || '#'}" download="${pmprEscape(m.fileName || 'document')}" class="flex items-center gap-3 p-2 bg-black/5 dark:bg-white/5 rounded-lg border border-black/10 mb-1"><i class="fa-solid fa-file-lines text-blue-500 text-2xl"></i><span class="font-medium text-xs truncate">${pmprEscape(m.fileName || 'Document')}</span></a>`;
+  if (m.type === 'audio') content = `<audio controls src="${m.mediaUrl}" class="h-8 max-w-[210px]"></audio>`;
+  const reactionChips = Object.entries(m.reactions || {}).filter(([, users]) => users.length).map(([e, users]) => `<button data-pmpr-reaction="${e}" data-id="${m.id}" class="text-xs bg-white/80 dark:bg-black/20 rounded-full px-1.5 py-0.5">${e} ${users.length}</button>`).join('');
+  return `<div class="relative max-w-[80%] md:max-w-[65%] rounded-xl px-3 py-2 text-sm shadow-sm ${isMe ? 'bg-wa-lightBubbleOut dark:bg-wa-darkBubbleOut' : 'bg-white dark:bg-wa-darkBubbleIn'} text-slate-900 dark:text-slate-100">${pmprRenderActions(m, isMe)}${content}<div class="flex items-center justify-end gap-1 text-[10px] text-slate-400 mt-1"><span>${pmprEscape(m.time)}</span>${isMe ? `<span class="text-blue-500">${m.status === 'sent' ? '✓' : '✓✓'}</span>` : ''}</div>${reactionChips ? `<div class="flex gap-1 mt-1">${reactionChips}</div>` : ''}</div>`;
+}
+function renderMessages(searchQuery = '') {
+  if (!activeContactId || !messagesContainer) return;
+  let msgs = messagesStore[activeContactId] || [];
+  if (searchQuery) msgs = msgs.filter(m => pmprMessageLabel(m).toLowerCase().includes(searchQuery));
+  messagesContainer.innerHTML = '';
+  msgs.forEach(m => {
+    const isSystem = m.sender === 'system'; const isMe = m.sender === currentUser.phone || m.sender === 'me';
+    const row = document.createElement('div'); row.className = `flex ${isMe ? 'justify-end' : 'justify-start'} my-1 group`;
+    if (isSystem) row.innerHTML = `<span class="bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-200 text-xs px-3 py-1 rounded-lg">${pmprEscape(m.text)}</span>`;
+    else row.innerHTML = pmprRenderMessageHtml(m, isMe);
+    messagesContainer.appendChild(row);
+  });
+  messagesContainer.scrollTop = messagesContainer.scrollHeight;
+}
+function pmprShowMessageMenu(id) {
+  const m = pmprFindMessage(id); if (!m) return;
+  const isMe = m.sender === currentUser.phone;
+  const action = prompt(`Message actions:\n1 Reply\n2 Forward\n3 Copy\n4 ${m.starred ? 'Unstar' : 'Star'}\n5 ${m.pinned ? 'Unpin' : 'Pin'}\n6 Edit\n7 Delete for me\n8 Delete for everyone\nEnter number`);
+  if (action === '1') pmprSetReply(id); else if (action === '2') pmprForward(id); else if (action === '3') pmprCopy(id); else if (action === '4') { m.starred = !m.starred; pmprSave(); renderMessages(); } else if (action === '5') { m.pinned = !m.pinned; pmprSave(); renderMessages(); } else if (action === '6' && isMe) pmprSetEdit(id); else if (action === '7') pmprDelete(id); else if (action === '8' && isMe) pmprDelete(id, true);
+}
+function pmprInitEnhancements() {
+  messagesContainer?.addEventListener('click', e => {
+    const reaction = e.target.closest('[data-pmpr-reaction]'); if (reaction) return pmprToggleReaction(reaction.dataset.id, reaction.dataset.pmprReaction);
+    const reply = e.target.closest('[data-pmpr-action="reply"]'); if (reply) return pmprSetReply(reply.dataset.id);
+    const more = e.target.closest('[data-pmpr-more]'); if (more) return pmprShowMessageMenu(more.dataset.pmprMore);
+    const toggle = e.target.closest('[data-pmpr-react-toggle]'); if (toggle) return pmprShowReactions(toggle.dataset.pmprReactToggle);
+    const preview = e.target.closest('[data-pmpr-preview]'); if (preview) { const w = window.open(); w.document.write(`<title>PMPR preview</title><img src="${preview.dataset.pmprPreview}" style="max-width:100%;max-height:100vh;object-fit:contain">`); }
+  });
+  document.addEventListener('click', e => { if (e.target.closest('[data-pmpr-cancel-context]')) { pmprReplyTo = null; pmprEditingId = null; pmprUpdateComposer(); } });
+  const originalSend = sendTextMessage;
+  btnSendMessage?.addEventListener('click', () => {});
+  messageInput?.addEventListener('keydown', e => { if (e.key === 'Enter' && !e.shiftKey && pmprEditingId) { e.preventDefault(); const m = pmprFindMessage(pmprEditingId); if (m) { m.text = messageInput.value.trim(); m.edited = true; pmprSave(); renderMessages(); messageInput.value = ''; pmprEditingId = null; pmprUpdateComposer(); } } });
+  if (currentUser) pmprBroadcastPresence();
+}
+function pmprBroadcastPresence() { if (!currentUser) return; syncChannel.postMessage({ type: 'PRESENCE', payload: { phone: currentUser.phone, name: currentUser.name, online: true, at: Date.now() } }); clearTimeout(pmprPresenceTimer); pmprPresenceTimer = setTimeout(() => syncChannel.postMessage({ type: 'PRESENCE', payload: { phone: currentUser.phone, online: false, at: Date.now() } }), 45000); }
+const pmprOriginalLoadAppForUser = loadAppForUser;
+loadAppForUser = function() { pmprOriginalLoadAppForUser(); pmprInitEnhancements(); pmprBroadcastPresence(); };
+const pmprOriginalSendTextMessage = sendTextMessage;
+sendTextMessage = function() { if (pmprEditingId) { const m = pmprFindMessage(pmprEditingId); if (m) { m.text = messageInput.value.trim(); m.edited = true; pmprSave(); renderMessages(); messageInput.value = ''; pmprEditingId = null; pmprUpdateComposer(); } return; } const text = messageInput.value.trim(); if (text && pmprReplyTo) { const reply = pmprReplyTo; pmprReplyTo = null; pmprOriginalSendTextMessage(); const list = messagesStore[activeContactId] || []; const sent = list[list.length - 1]; if (sent) sent.replyTo = { text: reply.text, type: reply.type, fileName: reply.fileName }; pmprSave(); renderMessages(); pmprUpdateComposer(); } else pmprOriginalSendTextMessage(); };
+const pmprOriginalPush = pushAndBroadcastMessage;
+pushAndBroadcastMessage = function(msg) { msg.status = 'sent'; pmprOriginalPush(msg); setTimeout(() => { if (msg.status === 'sent') { msg.status = 'delivered'; pmprSave(); renderMessages(); } }, 650); };
+const pmprOriginalSetupBroadcast = setupBroadcastChannelListener;
+setupBroadcastChannelListener = function() { pmprOriginalSetupBroadcast(); const oldHandler = syncChannel.onmessage; syncChannel.onmessage = event => { if (event.data.type === 'PRESENCE') { const p = event.data.payload; contacts.filter(c => c.phone === p.phone).forEach(c => { c.online = p.online; c.lastSeen = p.at; }); if (activeContactId && contacts.find(c => c.id === activeContactId)?.phone === p.phone) { const c = contacts.find(c => c.id === activeContactId); chatHeaderStatus.textContent = p.online ? 'online' : `last seen ${new Date(p.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`; } return; } oldHandler?.(event); }; };
+
+window.addEventListener('beforeunload', () => { if (currentUser) syncChannel.postMessage({ type: 'PRESENCE', payload: { phone: currentUser.phone, online: false, at: Date.now() } }); });
+setTimeout(() => { if (typeof pmprInitEnhancements === 'function' && currentUser) pmprInitEnhancements(); }, 0);
