@@ -128,6 +128,7 @@ const btnLogin = document.getElementById('btn-login');
 const btnLogout = document.getElementById('btn-logout');
 const btnSignup = document.getElementById('btn-signup');
 const btnForgotPassword = document.getElementById('btn-forgot-password');
+const btnGoogleLogin = document.getElementById('btn-google-login');
 
 const userNameDisplay = document.getElementById('user-name-display');
 const userStatusDisplay = document.getElementById('user-status-display');
@@ -233,6 +234,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupSettingsAndTheme();
   setupCallHandlers();
   setupBroadcastChannelListener();
+  setupSupabaseAuthListener();
 });
 
 // Broadcast Channel Real-time Sync across Tabs
@@ -465,6 +467,28 @@ function setupAuthEventListeners() {
   if (btnLogout) btnLogout.addEventListener('click', handleLogout);
   if (btnSignup) btnSignup.addEventListener('click', handleSignup);
   if (btnForgotPassword) btnForgotPassword.addEventListener('click', handleForgotPassword);
+  if (btnGoogleLogin) btnGoogleLogin.addEventListener('click', handleGoogleLogin);
+}
+
+function setupSupabaseAuthListener() {
+  const client = window.PMPRSupabase?.client;
+  if (!client) return;
+  client.auth.onAuthStateChange(async (event, session) => {
+    if (!session?.user || !['SIGNED_IN', 'INITIAL_SESSION'].includes(event)) return;
+    const user = session.user;
+    const metadata = user.user_metadata || {};
+    currentUser = {
+      id: user.id,
+      name: metadata.full_name || metadata.name || user.email?.split('@')[0] || 'PMPR User',
+      email: user.email || '',
+      phone: metadata.phone || user.email || '',
+      about: 'Hey there! I am using PMPR.',
+      avatar: metadata.avatar_url || metadata.picture || selectedLoginAvatar
+    };
+    localStorage.setItem('wa_clone_current_user', JSON.stringify(currentUser));
+    await PMPRSupabase.saveProfile(user, { name: currentUser.name, phone: currentUser.phone, about: currentUser.about, avatar_url: currentUser.avatar });
+    loadAppForUser();
+  });
 }
 
 function setupNavigationAndModals() {
@@ -995,6 +1019,16 @@ async function handleForgotPassword() {
   const { error } = await PMPRSupabase.resetPassword(email);
   if (error) return alert(error.message || 'Unable to send password reset email.');
   alert('Password reset email sent. Check your inbox.');
+}
+
+async function handleGoogleLogin() {
+  if (!window.PMPRSupabase?.enabled) return alert('Configure Supabase URL and publishable key first in supabase-config.js.');
+  try {
+    const { error } = await PMPRSupabase.signInWithGoogle();
+    if (error) alert(error.message || 'Unable to start Google login. Enable Google provider in Supabase first.');
+  } catch (error) {
+    alert(error.message || 'Unable to start Google login.');
+  }
 }
 
 function handleLogout() {
