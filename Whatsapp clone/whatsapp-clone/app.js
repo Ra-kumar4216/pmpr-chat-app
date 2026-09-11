@@ -119,11 +119,15 @@ const syncChannel = new BroadcastChannel('pmpr_chat_sync_channel');
 const authScreen = document.getElementById('auth-screen');
 const mainApp = document.getElementById('main-app');
 const loginNameInput = document.getElementById('login-name');
+const loginEmailInput = document.getElementById('login-email');
 const loginPhoneInput = document.getElementById('login-phone');
+const loginPasswordInput = document.getElementById('login-password');
 const loginAboutInput = document.getElementById('login-about');
 const avatarSelectorContainer = document.getElementById('avatar-selector');
 const btnLogin = document.getElementById('btn-login');
 const btnLogout = document.getElementById('btn-logout');
+const btnSignup = document.getElementById('btn-signup');
+const btnForgotPassword = document.getElementById('btn-forgot-password');
 
 const userNameDisplay = document.getElementById('user-name-display');
 const userStatusDisplay = document.getElementById('user-status-display');
@@ -459,6 +463,8 @@ function checkExistingAuth() {
 function setupAuthEventListeners() {
   if (btnLogin) btnLogin.addEventListener('click', handleLogin);
   if (btnLogout) btnLogout.addEventListener('click', handleLogout);
+  if (btnSignup) btnSignup.addEventListener('click', handleSignup);
+  if (btnForgotPassword) btnForgotPassword.addEventListener('click', handleForgotPassword);
 }
 
 function setupNavigationAndModals() {
@@ -925,17 +931,40 @@ function switchSidebarView(viewName) {
   }
 }
 
-function handleLogin() {
+async function handleLogin() {
   const name = loginNameInput.value.trim();
-  const phone = loginPhoneInput.value.trim();
+  const email = loginEmailInput ? loginEmailInput.value.trim().toLowerCase() : '';
+  const phoneInput = loginPhoneInput.value.trim();
+  const phone = phoneInput || email;
   const about = loginAboutInput.value.trim() || 'Hey there! I am using PMPR.';
+  const password = loginPasswordInput ? loginPasswordInput.value : '';
 
   if (!name) return alert('Please enter your name.');
-  if (!phone) return alert('Please enter your phone number.');
+  if (!email) return alert('Please enter your email address.');
+  if (!/^\S+@\S+\.\S+$/.test(email)) return alert('Please enter a valid email address.');
+
+  if (window.PMPRSupabase?.enabled) {
+    if (password.length < 6) return alert('Password must be at least 6 characters.');
+    const { data, error } = await PMPRSupabase.signIn(email, password);
+    if (error) return alert(error.message || 'Unable to login with email.');
+    currentUser = {
+      id: data.user.id,
+      name: data.user.user_metadata?.name || name,
+      email: data.user.email,
+      phone,
+      about,
+      avatar: data.user.user_metadata?.avatar_url || selectedLoginAvatar
+    };
+    localStorage.setItem('wa_clone_current_user', JSON.stringify(currentUser));
+    await PMPRSupabase.saveProfile(data.user, { name: currentUser.name, phone, about, avatar_url: currentUser.avatar });
+    loadAppForUser();
+    return;
+  }
 
   currentUser = {
     id: 'user_' + Date.now(),
     name: name,
+    email: email,
     phone: phone,
     about: about,
     avatar: selectedLoginAvatar
@@ -945,8 +974,32 @@ function handleLogin() {
   loadAppForUser();
 }
 
+async function handleSignup() {
+  const name = loginNameInput.value.trim();
+  const email = loginEmailInput?.value.trim().toLowerCase();
+  const phone = loginPhoneInput.value.trim() || email;
+  const password = loginPasswordInput?.value || '';
+  if (!name || !email || !/^\S+@\S+\.\S+$/.test(email)) return alert('Enter your name and a valid email address.');
+  if (password.length < 6) return alert('Password must be at least 6 characters.');
+  if (!window.PMPRSupabase?.enabled) return alert('Configure Supabase URL and anon key first in supabase-config.js.');
+  const { data, error } = await PMPRSupabase.signUp({ email, password, name, phone, avatar: selectedLoginAvatar });
+  if (error) return alert(error.message || 'Unable to create account.');
+  if (!data.session) return alert('Account created. Check your email to verify your account, then login.');
+  alert('Account created successfully.');
+}
+
+async function handleForgotPassword() {
+  const email = loginEmailInput?.value.trim().toLowerCase();
+  if (!email || !/^\S+@\S+\.\S+$/.test(email)) return alert('Enter your email address first.');
+  if (!window.PMPRSupabase?.enabled) return alert('Configure Supabase URL and anon key first in supabase-config.js.');
+  const { error } = await PMPRSupabase.resetPassword(email);
+  if (error) return alert(error.message || 'Unable to send password reset email.');
+  alert('Password reset email sent. Check your inbox.');
+}
+
 function handleLogout() {
   if (confirm('Are you sure you want to log out of PMPR?')) {
+    window.PMPRSupabase?.signOut?.();
     localStorage.removeItem('wa_clone_current_user');
     currentUser = null;
     mainApp.classList.add('hidden');
