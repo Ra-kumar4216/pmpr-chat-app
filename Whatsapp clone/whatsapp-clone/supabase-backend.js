@@ -11,6 +11,13 @@
       if (!client) throw new Error('Supabase is not configured. Add your project URL and anon key in supabase-config.js.');
       return client.auth.signInWithPassword({ email, password });
     },
+    async signInWithGoogle() {
+      if (!client) throw new Error('Supabase is not configured.');
+      return client.auth.signInWithOAuth({
+        provider: 'google',
+        options: { redirectTo: `${window.location.origin}${window.location.pathname}` }
+      });
+    },
     async signUp({ email, password, name, phone, avatar }) {
       if (!client) throw new Error('Supabase is not configured.');
       return client.auth.signUp({ email, password, options: { data: { name, phone, avatar_url: avatar } } });
